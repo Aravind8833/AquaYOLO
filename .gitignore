@@ -1,0 +1,29 @@
+# ============================================================
+# Git Ignore for AquaYOLO
+# ============================================================
+
+# Large Dataset Folders (Dataset is loaded via Google Drive in Colab)
+data/
+*.zip
+*.tar.gz
+
+# Past Experiment Runs & Checkpoints (>100MB rejected by GitHub)
+runs/
+*.bak
+*.backup*
+
+# Keep pretrained base weights
+!yolov8s.pt
+
+# Python caches and virtual environments
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.vscode/
+.idea/
+*.log
+
+# OS-generated files
+.DS_Store
+Thumbs.db
