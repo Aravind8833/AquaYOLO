@@ -271,8 +271,8 @@ def process_classification_dataset(source_dir: Path, output_dir: Path, prefix: s
     return copied_count
 
 
-def merge_three_zips(zip_paths: list, output_dir: Path, temp_extract_dir: Path):
-    """Main pipeline to extract, harmonize, and merge the 3 datasets."""
+def merge_datasets(sources: list, output_dir: Path, temp_extract_dir: Path):
+    """Main pipeline to extract, harmonize, and merge multiple datasets (zips or folders)."""
     output_dir = Path(output_dir)
     temp_extract_dir = Path(temp_extract_dir)
 
@@ -285,27 +285,34 @@ def merge_three_zips(zip_paths: list, output_dir: Path, temp_extract_dir: Path):
 
     total_images = 0
 
-    for idx, zip_path in enumerate(zip_paths, 1):
-        zip_path = Path(zip_path)
-        if not zip_path.exists():
-            print(f"⚠️ Warning: Zip not found: {zip_path}")
+    for idx, src_path in enumerate(sources, 1):
+        src_path = Path(src_path)
+        if not src_path.exists():
+            print(f"⚠️ Warning: Dataset path not found: {src_path}")
             continue
 
-        prefix = f"ds{idx}_{zip_path.stem}"
-        extract_folder = temp_extract_dir / f"dataset_{idx}"
-        extract_folder.mkdir(parents=True, exist_ok=True)
+        prefix = f"ds{idx}_{src_path.stem}"
 
-        extract_zip(zip_path, extract_folder)
+        if src_path.is_file() and src_path.suffix.lower() == ".zip":
+            extract_folder = temp_extract_dir / f"dataset_{idx}"
+            extract_folder.mkdir(parents=True, exist_ok=True)
+            extract_zip(src_path, extract_folder)
+        elif src_path.is_dir():
+            extract_folder = src_path
+            print(f"-> Reading directory: {src_path.name}")
+        else:
+            print(f"⚠️ Skipping unknown format: {src_path}")
+            continue
 
         # Check if dataset has data.yaml (YOLO detection) or is folder-based (Classification)
         if list(extract_folder.rglob("data.yaml")):
-            print(f"-> Detected YOLO Object Detection format in {zip_path.name}")
+            print(f"-> Detected YOLO Object Detection format in {src_path.name}")
             cnt = process_yolo_dataset(extract_folder, output_dir, prefix)
         else:
-            print(f"-> Detected Image Classification folder structure in {zip_path.name}")
+            print(f"-> Detected Image Classification folder structure in {src_path.name}")
             cnt = process_classification_dataset(extract_folder, output_dir, prefix)
 
-        print(f"  Processed {cnt} images from {zip_path.name}\n")
+        print(f"  Processed {cnt} images from {src_path.name}\n")
         total_images += cnt
 
     # Generate unified data.yaml
@@ -332,3 +339,7 @@ def merge_three_zips(zip_paths: list, output_dir: Path, temp_extract_dir: Path):
     print("Ready for high-accuracy YOLO training without label collision!")
     print("=" * 70)
     return data_yaml_path
+
+
+# Backward compatibility alias
+merge_three_zips = merge_datasets
