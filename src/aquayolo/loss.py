@@ -919,26 +919,15 @@ def aqua_loss(
         # Select positive boxes
         # ----------------------------------------------------
 
-        mask4 = box_mask.expand(
-            -1,
-            4,
-            -1,
-            -1,
-        ).bool()
+        pos_mask = (box_mask > 0.5).squeeze(1)
 
-        predicted_boxes = pred_xywh[
-            mask4
-        ].reshape(
-            -1,
-            4,
-        )
+        predicted_boxes = pred_xywh.permute(0, 2, 3, 1)[
+            pos_mask
+        ]
 
-        target_boxes = box_target[
-            mask4
-        ].reshape(
-            -1,
-            4,
-        )
+        target_boxes = box_target.permute(0, 2, 3, 1)[
+            pos_mask
+        ]
 
         # ----------------------------------------------------
         # Smooth-L1

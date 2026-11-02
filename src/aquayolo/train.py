@@ -1441,7 +1441,7 @@ def main():
 
                     preds = decode_predictions(
                         outputs,
-                        conf_threshold=0.005,
+                        conf_threshold=0.001,
                         nms_iou=0.45,
                     )
 

@@ -242,7 +242,7 @@ def decode_scale(
 
 def decode_predictions(
     outputs,
-    conf_threshold=0.005,
+    conf_threshold=0.001,
     nms_iou=0.45,
 ):
 
@@ -389,7 +389,7 @@ def decode_predictions(
         keep_indices = keep_indices[
             order
         ]
-        MAX_DETECTIONS = 50
+        MAX_DETECTIONS = 100
 
         if keep_indices.numel() > MAX_DETECTIONS:
             keep_indices = keep_indices[:MAX_DETECTIONS]
