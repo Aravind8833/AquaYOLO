@@ -417,6 +417,8 @@ def calculate_class_counts(dataset, nc=None):
         for i in range(num_c)
     }
 
+    remap = getattr(dataset, "class_remap", None)
+
     for image_path in dataset.images:
 
         label_path = (
@@ -446,7 +448,12 @@ def calculate_class_counts(dataset, nc=None):
                 except ValueError:
                     continue
 
-                if 0 <= cls_id < NUM_CLASSES:
+                if remap is not None:
+                    if cls_id not in remap:
+                        continue
+                    cls_id = remap[cls_id]
+
+                if 0 <= cls_id < num_c:
                     counts[cls_id] += 1
 
     return counts
@@ -1147,7 +1154,7 @@ def main():
 
         train_dataset.remap_classes(old_to_new, num_classes)
         val_dataset.remap_classes(old_to_new, num_classes)
-        class_counts = calculate_class_counts(train_dataset, nc=num_classes)
+        class_counts = {new_id: class_counts[old_id] for old_id, new_id in old_to_new.items()}
 
     class_weights = make_class_weights(
         class_counts=class_counts,
