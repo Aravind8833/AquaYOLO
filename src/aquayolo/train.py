@@ -119,6 +119,12 @@ class AquaYOLODataset(Dataset):
         self.size = size
         self.augment = augment
         self.num_classes = num_classes or NUM_CLASSES
+        self.class_remap = None
+
+    def remap_classes(self, old_to_new, new_num_classes):
+        """Remap class IDs and update active class count."""
+        self.num_classes = new_num_classes
+        self.class_remap = old_to_new
 
         self.image_dir = (
             self.root
@@ -201,6 +207,11 @@ class AquaYOLODataset(Dataset):
                     h = float(parts[4])
                 except ValueError:
                     continue
+
+                if self.class_remap is not None:
+                    if cls_id not in self.class_remap:
+                        continue
+                    cls_id = self.class_remap[cls_id]
 
                 if cls_id < 0 or cls_id >= self.num_classes:
                     continue
@@ -1109,6 +1120,53 @@ def main():
     )
 
     # --------------------------------------------------------
+    # Class frequencies & Zero-Annotation Filtering
+    # --------------------------------------------------------
+
+    print()
+    print(
+        "Calculating class frequencies..."
+    )
+
+    class_counts = calculate_class_counts(
+        train_dataset,
+        nc=num_classes
+    )
+
+    # Automatically filter out any remaining 0-annotation classes from model
+    active_indices = [i for i, c in class_counts.items() if c > 0]
+    if 0 < len(active_indices) < num_classes:
+        zero_classes = [class_names[i] for i in range(num_classes) if class_counts.get(i, 0) == 0]
+        print(f"\n⚡ Auto-filtering {len(zero_classes)} zero-annotation species from model head:")
+        for zc in zero_classes:
+            print(f"   - Excluded '{zc}' (0 annotations)")
+
+        old_to_new = {old_id: new_id for new_id, old_id in enumerate(active_indices)}
+        class_names = [class_names[i] for i in active_indices]
+        num_classes = len(class_names)
+
+        train_dataset.remap_classes(old_to_new, num_classes)
+        val_dataset.remap_classes(old_to_new, num_classes)
+        class_counts = calculate_class_counts(train_dataset, nc=num_classes)
+
+    class_weights = make_class_weights(
+        class_counts=class_counts,
+        nc=num_classes
+    ).to(device)
+
+    print()
+    print(f"Active training species ({num_classes}):")
+
+    for cls_id, count in class_counts.items():
+
+        cname = class_names[cls_id] if cls_id < len(class_names) else f"class_{cls_id}"
+        print(
+            f"  {cls_id:2d} "
+            f"{cname:25s} "
+            f"{count}"
+        )
+
+    # --------------------------------------------------------
     # Data loaders
     # --------------------------------------------------------
 
@@ -1129,41 +1187,6 @@ def main():
         pin_memory=torch.cuda.is_available(),
         collate_fn=collate_fn,
     )
-
-    # --------------------------------------------------------
-    # Class weights
-    # --------------------------------------------------------
-
-    print()
-    print(
-        "Calculating class frequencies..."
-    )
-
-    class_counts = calculate_class_counts(
-        train_dataset,
-        nc=num_classes
-    )
-
-    class_weights = make_class_weights(
-        class_counts=class_counts,
-        nc=num_classes
-    ).to(device)
-
-    print(
-        "Class weights created."
-    )
-
-    print()
-    print("Training annotation counts:")
-
-    for cls_id, count in class_counts.items():
-
-        cname = class_names[cls_id] if cls_id < len(class_names) else f"class_{cls_id}"
-        print(
-            f"  {cls_id:2d} "
-            f"{cname:25s} "
-            f"{count}"
-        )
 
     # --------------------------------------------------------
     # Model
@@ -1283,6 +1306,14 @@ def main():
         output_dir
         /
         "history.csv"
+    )
+
+    # --------------------------------------------------------
+    # Mixed precision scaler (FP16 AMP acceleration)
+    # --------------------------------------------------------
+
+    scaler = torch.cuda.amp.GradScaler(
+        enabled=(device.type == "cuda")
     )
 
     # --------------------------------------------------------
