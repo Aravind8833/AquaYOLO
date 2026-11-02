@@ -2,6 +2,10 @@ import argparse
 import csv
 from pathlib import Path
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import numpy as np
 import torch
 import torchvision
 from torch.utils.data import DataLoader
@@ -876,7 +880,72 @@ def save_results(
                 ]
             )
 
+    plot_evaluation_graphs(output_dir, results)
+
     return summary, per_class
+
+
+def plot_evaluation_graphs(output_dir, results):
+    """Generates visual metric graphs for evaluation."""
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Per-Class AP50 Bar Chart
+    classes_with_data = [
+        (r["name"], r["ap50"], r["num_gt"])
+        for r in results.get("per_class", {}).values()
+        if r.get("num_gt", 0) > 0
+    ]
+
+    if classes_with_data:
+        names = [c[0] for c in classes_with_data]
+        ap_vals = [c[1] for c in classes_with_data]
+
+        plt.figure(figsize=(12, max(6, len(names) * 0.35)))
+        plt.style.use("dark_background")
+        y_pos = np.arange(len(names))
+        colors = plt.cm.viridis(np.linspace(0.3, 0.9, len(names)))
+
+        bars = plt.barh(y_pos, ap_vals, color=colors, edgecolor="white", alpha=0.85)
+        plt.yticks(y_pos, names, fontsize=10)
+        plt.xlabel("Average Precision @ IoU 0.50 (AP50)", fontsize=11, fontweight="bold")
+        plt.title(f"AquaYOLO Per-Class Detection Accuracy (Mean AP50: {results['mAP50']:.4f})", fontsize=13, fontweight="bold", pad=12)
+        plt.xlim(0, 1.05)
+        plt.axvline(results["mAP50"], color="#f59e0b", linestyle="--", linewidth=2, label=f"mAP@0.50 = {results['mAP50']:.4f}")
+        plt.legend(loc="lower right")
+
+        for bar, val in zip(bars, ap_vals):
+            plt.text(val + 0.01, bar.get_y() + bar.get_height() / 2, f"{val:.3f}", va="center", fontsize=9, color="white")
+
+        plt.tight_layout()
+        plt.savefig(output_dir / "per_class_ap.png", dpi=200)
+        plt.close()
+
+    # 2. Evaluation Summary Dashboard Card
+    fig, ax = plt.subplots(figsize=(10, 4))
+    fig.patch.set_facecolor("#0f172a")
+    ax.set_facecolor("#0f172a")
+    ax.axis("off")
+
+    metrics_text = [
+        ("Images Evaluated", f"{results['images']}"),
+        ("mAP @ 0.50", f"{results['mAP50']:.4f}"),
+        ("mAP @ 0.50:0.95", f"{results['mAP5095']:.4f}"),
+        ("Precision @ 0.50", f"{results['precision50']:.4f}"),
+        ("Recall @ 0.50", f"{results['recall50']:.4f}"),
+    ]
+
+    ax.text(0.5, 0.88, "AquaYOLO Final Model Evaluation Summary", fontsize=14, fontweight="bold", color="#38bdf8", ha="center")
+    for idx, (label, val) in enumerate(metrics_text):
+        x = 0.1 + (idx % 3) * 0.32
+        y = 0.55 if idx < 3 else 0.20
+        ax.text(x, y + 0.08, label, fontsize=10, color="#94a3b8")
+        ax.text(x, y, val, fontsize=16, fontweight="bold", color="#f8fafc")
+
+    plt.tight_layout()
+    plt.savefig(output_dir / "evaluation_summary.png", dpi=200, facecolor=fig.get_facecolor())
+    plt.close()
+
 
 
 # ============================================================
@@ -991,7 +1060,7 @@ def main():
     )
 
     model = AquaYOLO(
-        nc=NUM_CLASSES
+        nc=19
     ).to(device)
 
     checkpoint = torch.load(

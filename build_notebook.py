@@ -1,0 +1,398 @@
+import json
+from pathlib import Path
+
+notebook = {
+    "cells": [
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "# 🌊 AquaYOLO: AI-Based Underwater Marine Organism Detection & Classification\n",
+                "\n",
+                "AquaYOLO is a deep learning system specifically designed to detect and classify marine species and humans in underwater images and videos, even in murky, low-visibility, and color-attenuated environments.\n",
+                "\n",
+                "### 🔬 Complete End-to-End Pipeline in This Notebook:\n",
+                "1. **⚡ Fast Direct In-Colab Download**: Ultra-fast (100+ MB/s) downloads from Kaggle & Roboflow directly into Colab.\n",
+                "2. **🔄 Marine Dataset Harmonizer**: Zero-collision remapping of annotations into a unified 26-class marine taxonomy.\n",
+                "3. **🌊 Stage-1 Underwater Enhancement**: LAB CLAHE contrast enhancement and red-spectrum attenuation compensation.\n",
+                "4. **🧠 Custom AquaYOLO Architecture Training**:\n",
+                "   - CSPDarknet Backbone + SPPF\n",
+                "   - Multi-Scale Aqua-Attn: **Spectral Attenuation Compensator (SAC)** + **Turbidity Contrast Gate (TCG)** at P3, P4, and P5\n",
+                "   - PANet Multi-Scale Neck + Decoupled Anchor-Free Detection Head\n",
+                "   - Class-Weighted Focal Loss\n",
+                "   - Cosine Annealing LR Scheduler with Warmup + Underwater Augmentation\n",
+                "5. **📊 Comprehensive Evaluation**: Per-class AP, mAP@0.50, mAP@0.50:0.95, Precision, Recall, and F1.\n",
+                "6. **🔍 EigenCAM Visual Explanations**: Visual heatmaps explaining SAC spectral compensation and TCG turbidity focus.\n",
+                "7. **📦 One-Click Zip & Download**: Automatically bundles all `.pt` model weights, metric graphs, and logs to your local computer."
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 🚀 Step 1: Check GPU Runtime\n",
+                "Verify that your GPU runtime is active (Runtime -> Change runtime type -> T4 GPU)."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "!nvidia-smi"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 📦 Step 2: Clone AquaYOLO Repository & Install Dependencies"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "# Clone repository\n",
+                "!git clone https://github.com/Aravind8833/AquaYOLO.git\n",
+                "%cd /content/AquaYOLO\n",
+                "\n",
+                "# Add src to Python path\n",
+                "import sys\n",
+                "import os\n",
+                "if \"/content/AquaYOLO/src\" not in sys.path:\n",
+                "    sys.path.append(\"/content/AquaYOLO/src\")\n",
+                "os.environ[\"PYTHONPATH\"] = \"/content/AquaYOLO/src:\" + os.environ.get(\"PYTHONPATH\", \"\")\n",
+                "\n",
+                "# Install required libraries\n",
+                "!pip install -q ultralytics opencv-python matplotlib seaborn pyyaml pandas pillow tqdm kagglehub roboflow\n",
+                "print('\\n✅ Environment ready and AquaYOLO module loaded!')"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## ⚡ Step 3: Direct Fast Download from Kaggle & Roboflow\n",
+                "\n",
+                "Downloads datasets directly into Colab in under 1-2 minutes at 100+ MB/s.\n",
+                "\n",
+                "### 🔑 Kaggle Authentication:\n",
+                "Enter your Kaggle credentials below (from your downloaded `kaggle.json`):"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "import os\n",
+                "from pathlib import Path\n",
+                "import kagglehub\n",
+                "\n",
+                "# =====================================================================\n",
+                "# ⚙️ OPTION 1: KAGGLE CREDENTIALS (ENTER USERNAME & KEY)\n",
+                "# =====================================================================\n",
+                "os.environ[\"KAGGLE_USERNAME\"] = \"your_kaggle_username\"\n",
+                "os.environ[\"KAGGLE_KEY\"] = \"your_kaggle_api_key\"\n",
+                "\n",
+                "# Or upload kaggle.json directly if username is not filled in:\n",
+                "if not os.path.exists(os.path.expanduser(\"~/.kaggle/kaggle.json\")) and os.environ[\"KAGGLE_USERNAME\"] == \"your_kaggle_username\":\n",
+                "    print(\"Upload your kaggle.json file:\")\n",
+                "    from google.colab import files\n",
+                "    uploaded = files.upload()\n",
+                "    if uploaded:\n",
+                "        os.makedirs(os.path.expanduser(\"~/.kaggle\"), exist_ok=True)\n",
+                "        for fn in uploaded:\n",
+                "            os.rename(fn, os.path.expanduser(f\"~/.kaggle/{fn}\"))\n",
+                "        os.chmod(os.path.expanduser(\"~/.kaggle/kaggle.json\"), 0o600)\n",
+                "\n",
+                "# 1. Download Kaggle Dataset 1: aquarium-data-cots\n",
+                "print(\"\\n1. Downloading slavkoprytula/aquarium-data-cots from Kaggle...\")\n",
+                "path_cots = kagglehub.dataset_download(\"slavkoprytula/aquarium-data-cots\")\n",
+                "print(f\"   COTS downloaded to: {path_cots}\")\n",
+                "\n",
+                "# 2. Download Kaggle Dataset 2: sea-animals-image-dataste\n",
+                "print(\"\\n2. Downloading vencerlanz09/sea-animals-image-dataste from Kaggle...\")\n",
+                "path_sea = kagglehub.dataset_download(\"vencerlanz09/sea-animals-image-dataste\")\n",
+                "print(f\"   Sea Animals downloaded to: {path_sea}\")"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "### 🐠 Download Roboflow Dataset (`marine-life-pzpu1`)\n",
+                "Paste your Roboflow API key or curl download URL below (optional):"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "import subprocess\n",
+                "from pathlib import Path\n",
+                "\n",
+                "ROBOFLOW_DOWNLOAD_DIR = Path(\"/content/downloads/marine_life_roboflow\")\n",
+                "ROBOFLOW_DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)\n",
+                "\n",
+                "# =====================================================================\n",
+                "# ⚙️ ROBOFLOW CREDENTIALS (PASTE API KEY OR CURL URL)\n",
+                "# =====================================================================\n",
+                "ROBOFLOW_API_KEY = \"\"   # e.g. \"abc123xyz\"\n",
+                "ROBOFLOW_CURL_URL = \"\"  # e.g. \"https://universe.roboflow.com/ds/...\"\n",
+                "# =====================================================================\n",
+                "\n",
+                "path_roboflow = None\n",
+                "if ROBOFLOW_API_KEY:\n",
+                "    from roboflow import Roboflow\n",
+                "    print(\"Downloading from Roboflow via Python API...\")\n",
+                "    rf = Roboflow(api_key=ROBOFLOW_API_KEY)\n",
+                "    project = rf.workspace(\"boats-hr2s2\").project(\"marine-life-pzpu1\")\n",
+                "    dataset = project.version(1).download(\"yolov8\", location=str(ROBOFLOW_DOWNLOAD_DIR))\n",
+                "    path_roboflow = ROBOFLOW_DOWNLOAD_DIR\n",
+                "    print(f\"✅ Roboflow dataset downloaded to: {path_roboflow}\")\n",
+                "elif ROBOFLOW_CURL_URL:\n",
+                "    print(\"Downloading from Roboflow via curl...\")\n",
+                "    zip_dest = ROBOFLOW_DOWNLOAD_DIR / \"roboflow.zip\"\n",
+                "    subprocess.run(f\"curl -L '{ROBOFLOW_CURL_URL}' > '{zip_dest}'\", shell=True, check=True)\n",
+                "    subprocess.run(f\"unzip -q '{zip_dest}' -d '{ROBOFLOW_DOWNLOAD_DIR}'\", shell=True, check=True)\n",
+                "    path_roboflow = ROBOFLOW_DOWNLOAD_DIR\n",
+                "    print(f\"✅ Roboflow dataset downloaded and unzipped to: {path_roboflow}\")\n",
+                "else:\n",
+                "    print(\"ℹ️ Note: Proceeding with Kaggle marine datasets.\")"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 🔄 Step 4: Harmonize & Merge Datasets (Zero Class Collisions)\n",
+                "Builds `/content/dataset` with clean train, val, and test splits and remapped classes."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "from dataset_merger import merge_datasets\n",
+                "\n",
+                "downloaded_sources = [p for p in [path_cots, path_sea, path_roboflow] if p is not None and Path(p).exists()]\n",
+                "print(f\"Datasets ready for harmonization: {len(downloaded_sources)}\")\n",
+                "for s in downloaded_sources:\n",
+                "    print(f\"  📂 {Path(s).name}\")\n",
+                "\n",
+                "LOCAL_DATASET_DIR = Path(\"/content/dataset\")\n",
+                "TEMP_EXTRACT_DIR = Path(\"/content/temp_extract\")\n",
+                "\n",
+                "DATA_YAML_PATH = merge_datasets(downloaded_sources, LOCAL_DATASET_DIR, TEMP_EXTRACT_DIR)\n",
+                "print(f\"\\n✅ Unified dataset ready: {DATA_YAML_PATH}\")"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 🧠 Step 5: Train Custom AquaYOLO Architecture (Primary Model)\n",
+                "\n",
+                "Trains the custom **AquaYOLO** deep learning model featuring:\n",
+                "- **CSPDarknet Backbone + SPPF**\n",
+                "- **Multi-Scale Aqua-Attn** (SAC + TCG at P3, P4, and P5)\n",
+                "- **PANet Feature Fusion Neck**\n",
+                "- **Decoupled Anchor-Free Detection Head**\n",
+                "- **Class-Weighted Focal Loss**\n",
+                "- **Cosine LR Scheduler + Warmup + Data Augmentation**"
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "# Set output directory\n",
+                "AQUAYOLO_OUT = \"/content/AquaYOLO/runs/aquayolo_custom\"\n",
+                "\n",
+                "# Run Custom AquaYOLO training\n",
+                "!python src/aquayolo/train.py \\\n",
+                "    --data /content/dataset \\\n",
+                "    --epochs 50 \\\n",
+                "    --batch 8 \\\n",
+                "    --size 640 \\\n",
+                "    --lr 0.001 \\\n",
+                "    --warmup-epochs 3 \\\n",
+                "    --augment \\\n",
+                "    --workers 2 \\\n",
+                "    --out \"{AQUAYOLO_OUT}\""
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 📊 Step 6: Comprehensive Model Evaluation (mAP, Precision, Recall)\n",
+                "Evaluates `best.pt` on the held-out test split, computing per-class AP, mAP@0.50, and generating evaluation graphs."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "EVAL_OUT = \"/content/AquaYOLO/runs/aquayolo_custom/evaluation\"\n",
+                "BEST_WEIGHTS = \"/content/AquaYOLO/runs/aquayolo_custom/best.pt\"\n",
+                "\n",
+                "!python src/aquayolo/evaluate.py \\\n",
+                "    --data /content/dataset \\\n",
+                "    --weights \"{BEST_WEIGHTS}\" \\\n",
+                "    --split test \\\n",
+                "    --batch 8 \\\n",
+                "    --out \"{EVAL_OUT}\""
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 🔍 Step 7: EigenCAM Visual Explanations (SAC + TCG + Attention Heatmaps)\n",
+                "Generates EigenCAM visual explanations highlighting the exact image regions influencing the AquaYOLO predictions."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "EIGENCAM_OUT = \"/content/AquaYOLO/runs/aquayolo_custom/eigencam\"\n",
+                "\n",
+                "!python src/aquayolo/eigencam.py \\\n",
+                "    --weights \"{BEST_WEIGHTS}\" \\\n",
+                "    --image /content/dataset/images/test \\\n",
+                "    --out \"{EIGENCAM_OUT}\""
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 📈 Step 8: Display All Generated Metric Graphs Inline\n",
+                "Displays all training loss curves, mAP progression, per-class accuracy, and EigenCAM explanations directly in Colab."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "from IPython.display import Image, display\n",
+                "from pathlib import Path\n",
+                "import glob\n",
+                "\n",
+                "def show_image(path_str, title):\n",
+                "    p = Path(path_str)\n",
+                "    if p.exists():\n",
+                "        print(\"=\" * 75)\n",
+                "        print(f\"📊 {title}: {p.name}\")\n",
+                "        print(\"=\" * 75)\n",
+                "        display(Image(filename=str(p), width=900))\n",
+                "    else:\n",
+                "        print(f\"ℹ️ {title} ({p.name}) not found yet.\")\n",
+                "\n",
+                "# 1. Training & Validation Results (Losses, mAP@0.50, Precision, Recall)\n",
+                "show_image(\"/content/AquaYOLO/runs/aquayolo_custom/results.png\", \"TRAINING & VALIDATION METRICS OVER EPOCHS\")\n",
+                "\n",
+                "# 2. Loss Curves & Component Breakdown\n",
+                "show_image(\"/content/AquaYOLO/runs/aquayolo_custom/loss_curve.png\", \"TOTAL LOSS CURVES\")\n",
+                "show_image(\"/content/AquaYOLO/runs/aquayolo_custom/loss_components.png\", \"LOSS COMPONENTS (BOX, OBJ, CLASS-WEIGHTED FOCAL LOSS)\")\n",
+                "\n",
+                "# 3. Per-Class Average Precision (AP@0.50)\n",
+                "show_image(\"/content/AquaYOLO/runs/aquayolo_custom/evaluation/per_class_ap.png\", \"PER-CLASS AVERAGE PRECISION (AP50)\")\n",
+                "show_image(\"/content/AquaYOLO/runs/aquayolo_custom/evaluation/evaluation_summary.png\", \"EVALUATION SUMMARY DASHBOARD\")\n",
+                "\n",
+                "# 4. EigenCAM Visual Explanations (SAC, TCG, Attention Heatmaps)\n",
+                "eigencam_plots = sorted(glob.glob(\"/content/AquaYOLO/runs/aquayolo_custom/eigencam/*.png\"))\n",
+                "if eigencam_plots:\n",
+                "    print(\"\\n\" + \"=\" * 75)\n",
+                "    print(\"🔍 EIGENCAM ATTENTION HEATMAPS (SAC + TCG + AQUA-ATTN)\")\n",
+                "    print(\"=\" * 75)\n",
+                "    for ec_img in eigencam_plots[:3]:\n",
+                "        display(Image(filename=ec_img, width=950))\n"
+            ]
+        },
+        {
+            "cell_type": "markdown",
+            "metadata": {},
+            "source": [
+                "## 📦 Step 9: Download All Weights & Results in a Zip File\n",
+                "Packages all `.pt` model weights (`best.pt`, `last.pt`, `FishInv.pt`, `MegaFauna.pt`), metric graphs, and CSV logs into a zip file and triggers a direct browser download to your local PC."
+            ]
+        },
+        {
+            "cell_type": "code",
+            "execution_count": None,
+            "metadata": {},
+            "outputs": [],
+            "source": [
+                "import os\n",
+                "import shutil\n",
+                "from google.colab import files\n",
+                "from datetime import datetime\n",
+                "\n",
+                "timestamp = datetime.now().strftime(\"%Y%m%d_%H%M%S\")\n",
+                "zip_filename = f\"AquaYOLO_All_Weights_and_Runs_{timestamp}\"\n",
+                "zip_path = f\"/content/{zip_filename}.zip\"\n",
+                "\n",
+                "export_dir = \"/content/AquaYOLO_export_bundle\"\n",
+                "if os.path.exists(export_dir):\n",
+                "    shutil.rmtree(export_dir)\n",
+                "os.makedirs(export_dir, exist_ok=True)\n",
+                "\n",
+                "# 1. Copy all training & evaluation runs (best.pt, last.pt, results.png, curves, logs)\n",
+                "if os.path.exists(\"/content/AquaYOLO/runs\"):\n",
+                "    shutil.copytree(\"/content/AquaYOLO/runs\", f\"{export_dir}/runs\", dirs_exist_ok=True)\n",
+                "\n",
+                "# 2. Copy root .pt weights (MegaFauna.pt, FishInv.pt, yolov8s.pt, etc.)\n",
+                "for pt_file in [\"FishInv.pt\", \"MegaFauna.pt\", \"yolov8s.pt\"]:\n",
+                "    pt_path = os.path.join(\"/content/AquaYOLO\", pt_file)\n",
+                "    if os.path.exists(pt_path):\n",
+                "        shutil.copy2(pt_path, export_dir)\n",
+                "\n",
+                "# 3. Create zip archive\n",
+                "print(f\"Creating zip archive: {zip_path} ...\")\n",
+                "shutil.make_archive(f\"/content/{zip_filename}\", \"zip\", export_dir)\n",
+                "\n",
+                "# 4. Trigger browser download\n",
+                "print(\"✅ Archive created successfully! Triggering browser download to your PC...\")\n",
+                "files.download(zip_path)\n"
+            ]
+        }
+    ],
+    "metadata": {
+        "accelerator": "GPU",
+        "colab": {
+            "provenance": []
+        },
+        "language_info": {
+            "name": "python"
+        }
+    },
+    "nbformat": 4,
+    "nbformat_minor": 0
+}
+
+output_path = Path(r"c:\Users\aravind\Desktop\college project\AquaYOLO_project_training_ready\AquaYOLO\AquaYOLO_Colab_Training_and_Evaluation.ipynb")
+with open(output_path, "w", encoding="utf-8") as f:
+    json.dump(notebook, f, indent=2)
+
+print("AquaYOLO_Colab_Training_and_Evaluation.ipynb generated successfully!")

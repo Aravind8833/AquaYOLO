@@ -1,9 +1,12 @@
 import argparse
 import csv
+import math
+import random
 import time
 from pathlib import Path
 
 import cv2
+import numpy as np
 import torch
 from torch.utils.data import Dataset, DataLoader
 
@@ -85,12 +88,14 @@ class AquaYOLODataset(Dataset):
         root,
         split,
         size=640,
+        augment=False,
     ):
         super().__init__()
 
         self.root = Path(root)
         self.split = split
         self.size = size
+        self.augment = augment
 
         self.image_dir = (
             self.root
@@ -197,6 +202,52 @@ class AquaYOLODataset(Dataset):
 
         return rows
 
+    @staticmethod
+    def _augment_hsv(
+        image,
+        h_gain=0.015,
+        s_gain=0.7,
+        v_gain=0.4,
+    ):
+        """
+        Random HSV augmentation for underwater
+        color variation robustness.
+        """
+
+        r = np.random.uniform(
+            -1, 1, 3
+        ) * [
+            h_gain,
+            s_gain,
+            v_gain,
+        ] + 1
+
+        hsv = cv2.cvtColor(
+            image,
+            cv2.COLOR_RGB2HSV
+        ).astype(np.float32)
+
+        hsv[..., 0] = (
+            hsv[..., 0] * r[0]
+        ) % 180
+
+        hsv[..., 1] = np.clip(
+            hsv[..., 1] * r[1],
+            0,
+            255,
+        )
+
+        hsv[..., 2] = np.clip(
+            hsv[..., 2] * r[2],
+            0,
+            255,
+        )
+
+        return cv2.cvtColor(
+            hsv.astype(np.uint8),
+            cv2.COLOR_HSV2RGB,
+        )
+
     def __getitem__(self, index):
 
         image_path = self.images[index]
@@ -230,22 +281,6 @@ class AquaYOLODataset(Dataset):
             size=self.size
         )
 
-        # HWC -> CHW
-        image_tensor = torch.from_numpy(
-            image
-        ).float()
-
-        image_tensor = image_tensor.permute(
-            2,
-            0,
-            1
-        )
-
-        # [0,255] -> [0,1]
-        image_tensor = (
-            image_tensor / 255.0
-        )
-
         # ----------------------------------------------------
         # Labels
         # ----------------------------------------------------
@@ -268,6 +303,45 @@ class AquaYOLODataset(Dataset):
                 labels,
                 dtype=torch.float32
             )
+
+        # ----------------------------------------------------
+        # Data augmentation (training only)
+        # ----------------------------------------------------
+
+        if self.augment:
+
+            # Random horizontal flip (50%)
+            if random.random() < 0.5:
+                image = np.fliplr(
+                    image
+                ).copy()
+
+                if target.numel() > 0:
+                    # Flip cx: cx' = 1 - cx
+                    target[:, 1] = (
+                        1.0 - target[:, 1]
+                    )
+
+            # HSV augmentation
+            image = self._augment_hsv(
+                image
+            )
+
+        # HWC -> CHW
+        image_tensor = torch.from_numpy(
+            image
+        ).float()
+
+        image_tensor = image_tensor.permute(
+            2,
+            0,
+            1
+        )
+
+        # [0,255] -> [0,1]
+        image_tensor = (
+            image_tensor / 255.0
+        )
 
         return image_tensor, target
 
@@ -621,7 +695,7 @@ def write_history(
 # ============================================================
 
 def plot_history(history, output_dir):
-    """Save training/validation loss graphs after every epoch."""
+    """Save comprehensive training/validation metric graphs after every epoch."""
     if not history:
         return
 
@@ -667,7 +741,75 @@ def plot_history(history, output_dir):
     fig.tight_layout()
     fig.savefig(output_dir / "loss_components.png", dpi=150)
     plt.close(fig)
-    print(f"Training graphs updated: {output_dir / 'loss_curve.png'}")
+
+    # mAP / Precision / Recall curves
+    has_map = any("mAP50" in r for r in history)
+    if has_map:
+        fig, axes = plt.subplots(1, 3, figsize=(15, 4.5))
+
+        # mAP50 curve
+        axes[0].plot(
+            epochs,
+            [r.get("mAP50", 0) for r in history],
+            marker="o", color="#2196F3", linewidth=2,
+        )
+        axes[0].set_title("mAP@0.50")
+        axes[0].set_xlabel("Epoch")
+        axes[0].set_ylabel("mAP@0.50")
+        axes[0].set_ylim(0, 1)
+        axes[0].grid(True, alpha=0.3)
+
+        # Precision curve
+        axes[1].plot(
+            epochs,
+            [r.get("precision", 0) for r in history],
+            marker="o", color="#4CAF50", linewidth=2,
+        )
+        axes[1].set_title("Precision")
+        axes[1].set_xlabel("Epoch")
+        axes[1].set_ylabel("Precision")
+        axes[1].set_ylim(0, 1)
+        axes[1].grid(True, alpha=0.3)
+
+        # Recall curve
+        axes[2].plot(
+            epochs,
+            [r.get("recall", 0) for r in history],
+            marker="o", color="#FF9800", linewidth=2,
+        )
+        axes[2].set_title("Recall")
+        axes[2].set_xlabel("Epoch")
+        axes[2].set_ylabel("Recall")
+        axes[2].set_ylim(0, 1)
+        axes[2].grid(True, alpha=0.3)
+
+        fig.suptitle("AquaYOLO Detection Metrics", fontsize=14)
+        fig.tight_layout()
+        fig.savefig(output_dir / "metrics_curve.png", dpi=150)
+        plt.close(fig)
+
+        # Combined results.png (like YOLO standard output)
+        fig, axes = plt.subplots(2, 3, figsize=(18, 10))
+        metrics = [
+            ("train_loss", "Train Loss", "#E53935"),
+            ("val_loss", "Val Loss", "#1E88E5"),
+            ("mAP50", "mAP@0.50", "#43A047"),
+            ("precision", "Precision", "#8E24AA"),
+            ("recall", "Recall", "#FB8C00"),
+            ("lr", "Learning Rate", "#00ACC1"),
+        ]
+        for ax, (key, title, color) in zip(axes.flat, metrics):
+            vals = [r.get(key, 0) for r in history]
+            ax.plot(epochs, vals, marker=".", color=color, linewidth=2)
+            ax.set_title(title)
+            ax.set_xlabel("Epoch")
+            ax.grid(True, alpha=0.3)
+        fig.suptitle("AquaYOLO Training Results", fontsize=16)
+        fig.tight_layout()
+        fig.savefig(output_dir / "results.png", dpi=150)
+        plt.close(fig)
+
+    print(f"Training graphs updated: {output_dir}")
 
 
 # ============================================================
@@ -696,7 +838,7 @@ def parse_args():
     parser.add_argument(
         "--batch",
         type=int,
-        default=1
+        default=8
     )
 
     parser.add_argument(
@@ -708,19 +850,33 @@ def parse_args():
     parser.add_argument(
         "--lr",
         type=float,
-        default=1e-4
+        default=1e-3
+    )
+
+    parser.add_argument(
+        "--lrf",
+        type=float,
+        default=0.01,
+        help="Final LR fraction (cosine schedule)"
+    )
+
+    parser.add_argument(
+        "--warmup-epochs",
+        type=int,
+        default=3,
+        help="Linear warmup epochs"
     )
 
     parser.add_argument(
         "--weight-decay",
         type=float,
-        default=1e-4
+        default=5e-4
     )
 
     parser.add_argument(
         "--workers",
         type=int,
-        default=0
+        default=2
     )
 
     parser.add_argument(
@@ -734,12 +890,25 @@ def parse_args():
         type=int,
         default=42
     )
-    
+
     parser.add_argument(
         "--pretrained",
         type=str,
         default=None,
         help="Optional AquaYOLO initialization checkpoint"
+    )
+
+    parser.add_argument(
+        "--augment",
+        action="store_true",
+        default=True,
+        help="Enable training augmentation (enabled by default)"
+    )
+
+    parser.add_argument(
+        "--no-augment",
+        action="store_true",
+        help="Disable training augmentation"
     )
 
     return parser.parse_args()
@@ -858,13 +1027,15 @@ def main():
     train_dataset = AquaYOLODataset(
         root=dataset_root,
         split="train",
-        size=args.size
+        size=args.size,
+        augment=(not args.no_augment),
     )
 
     val_dataset = AquaYOLODataset(
         root=dataset_root,
         split="val",
-        size=args.size
+        size=args.size,
+        augment=False,
     )
 
     print(
@@ -1000,14 +1171,45 @@ def main():
     )
 
     # --------------------------------------------------------
+    # Learning rate scheduler
+    #   Linear warmup -> Cosine annealing
+    # --------------------------------------------------------
+
+    def lr_lambda(epoch_idx):
+        """Warmup + Cosine annealing schedule."""
+        if epoch_idx < args.warmup_epochs:
+            # Linear warmup from 0.1x to 1x
+            return 0.1 + 0.9 * (
+                epoch_idx / max(args.warmup_epochs, 1)
+            )
+        # Cosine annealing after warmup
+        progress = (
+            (epoch_idx - args.warmup_epochs)
+            / max(args.epochs - args.warmup_epochs, 1)
+        )
+        return max(
+            args.lrf,
+            0.5 * (1.0 + math.cos(math.pi * progress)),
+        )
+
+    scheduler = torch.optim.lr_scheduler.LambdaLR(
+        optimizer,
+        lr_lambda=lr_lambda,
+    )
+
+    print(
+        f"LR schedule: linear warmup "
+        f"{args.warmup_epochs} epochs "
+        f"-> cosine annealing to {args.lrf}"
+    )
+
+    # --------------------------------------------------------
     # Training history
     # --------------------------------------------------------
 
     history = []
 
-    best_val_loss = float(
-        "inf"
-    )
+    best_mAP50 = 0.0
 
     best_path = (
         output_dir
@@ -1035,8 +1237,11 @@ def main():
             "-" * 70
         )
 
+        current_lr = optimizer.param_groups[0]["lr"]
+
         print(
             f"Epoch {epoch}/{args.epochs}"
+            f"  lr={current_lr:.6f}"
         )
 
         print(
@@ -1060,7 +1265,7 @@ def main():
         )
 
         # ----------------------------------------------------
-        # VALIDATION
+        # VALIDATION (loss)
         # ----------------------------------------------------
 
         val_metrics = validate(
@@ -1069,6 +1274,103 @@ def main():
             class_weights=class_weights,
             device=device,
         )
+
+        # ----------------------------------------------------
+        # DETECTION METRICS (mAP, precision, recall)
+        # Evaluated every epoch for proper monitoring.
+        # ----------------------------------------------------
+
+        mAP50 = 0.0
+        precision_val = 0.0
+        recall_val = 0.0
+
+        try:
+            from aquayolo.evaluate import (
+                decode_predictions,
+                collect_stats,
+                compute_ap,
+            )
+
+            model.eval()
+            all_preds = []
+            all_targets = []
+
+            with torch.no_grad():
+                for images, targets in val_loader:
+
+                    images = images.to(
+                        device,
+                        non_blocking=True
+                    )
+
+                    outputs = model(images)
+
+                    preds = decode_predictions(
+                        outputs,
+                        conf_threshold=0.25,
+                        nms_iou=0.45,
+                    )
+
+                    all_preds.extend(preds)
+                    all_targets.extend(targets)
+
+            stats = collect_stats(
+                all_preds,
+                all_targets,
+                iou_threshold=0.5,
+            )
+
+            aps = []
+            total_tp = 0
+            total_fp = 0
+            total_gt = 0
+
+            for cls_id in range(NUM_CLASSES):
+
+                cls_stats = stats[cls_id]
+
+                if (
+                    cls_stats["num_gt"] == 0
+                    and len(cls_stats["scores"]) == 0
+                ):
+                    continue
+
+                ap = compute_ap(
+                    cls_stats["scores"],
+                    cls_stats["matches"],
+                    cls_stats["num_gt"],
+                )
+
+                aps.append(ap)
+
+                total_gt += cls_stats["num_gt"]
+                total_tp += sum(cls_stats["matches"])
+                total_fp += sum(
+                    1 for m in cls_stats["matches"]
+                    if not m
+                )
+
+            mAP50 = (
+                sum(aps) / len(aps)
+                if aps
+                else 0.0
+            )
+
+            precision_val = (
+                total_tp / max(total_tp + total_fp, 1)
+            )
+
+            recall_val = (
+                total_tp / max(total_gt, 1)
+            )
+
+        except Exception as e:
+            print(
+                f"  mAP evaluation warning: {e}"
+            )
+
+        # Step the LR scheduler
+        scheduler.step()
 
         epoch_time = (
             time.time()
@@ -1098,6 +1400,12 @@ def main():
             f"{val_metrics['obj']:.4f} "
             f"cls="
             f"{val_metrics['cls']:.4f}"
+        )
+
+        print(
+            f"EVAL  mAP@0.50={mAP50:.4f} "
+            f"precision={precision_val:.4f} "
+            f"recall={recall_val:.4f}"
         )
 
         print(
@@ -1135,6 +1443,11 @@ def main():
 
             "val_cls":
                 val_metrics["cls"],
+
+            "mAP50": mAP50,
+            "precision": precision_val,
+            "recall": recall_val,
+            "lr": current_lr,
         }
 
         history.append(
@@ -1146,18 +1459,16 @@ def main():
             history
         )
 
-        # Refresh loss graphs after every completed epoch
+        # Refresh all graphs after every completed epoch
         plot_history(history, output_dir)
 
         # ----------------------------------------------------
-        # Best model
+        # Best model (by mAP@0.5)
         # ----------------------------------------------------
 
-        if val_metrics["loss"] < best_val_loss:
+        if mAP50 > best_mAP50:
 
-            best_val_loss = (
-                val_metrics["loss"]
-            )
+            best_mAP50 = mAP50
 
             save_checkpoint(
                 path=best_path,
@@ -1171,7 +1482,7 @@ def main():
 
             print(
                 f"NEW BEST MODEL: "
-                f"val_loss={best_val_loss:.4f}"
+                f"mAP@0.50={best_mAP50:.4f}"
             )
 
     # --------------------------------------------------------
@@ -1194,8 +1505,8 @@ def main():
     )
 
     print(
-        f"Best val loss  : "
-        f"{best_val_loss:.6f}"
+        f"Best mAP@0.50  : "
+        f"{best_mAP50:.6f}"
     )
 
     print("=" * 70)

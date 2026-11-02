@@ -392,7 +392,7 @@ class TurbidityContrastGate(nn.Module):
 
 
 class AquaAttn(nn.Module):
-    """
+    r"""
     Aqua-Attn.
 
     Position:
@@ -736,7 +736,7 @@ class DecoupledAnchorFreeHead(nn.Module):
 # ============================================================
 
 class AquaYOLO(nn.Module):
-    """
+    r"""
     Complete AquaYOLO model.
 
     Pipeline:
@@ -750,20 +750,19 @@ class AquaYOLO(nn.Module):
         SPPF
           |
           v
-      Aqua-Attn
-       /     \
-     SAC     TCG
-       \     /
-        Fusion
-          |
-          v
+      Aqua-Attn (Multi-Scale)
+       P3   P4   P5
+       |     |    |
+     SAC   SAC  SAC
+     TCG   TCG  TCG
+       |     |    |
         PANet
           |
           v
     Decoupled
     Anchor-Free
        Head
-      / | \
+      / | \\
     P3 P4 P5
     """
 
@@ -778,8 +777,19 @@ class AquaYOLO(nn.Module):
         # Backbone
         self.backbone = CSPDarknet()
 
-        # Aqua-Attn
-        self.aqua_attn = AquaAttn(
+        # Multi-Scale Aqua-Attn
+        # Applied at every feature scale for
+        # comprehensive underwater spectral
+        # attenuation compensation.
+        self.aqua_attn_p3 = AquaAttn(
+            channels=256
+        )
+
+        self.aqua_attn_p4 = AquaAttn(
+            channels=512
+        )
+
+        self.aqua_attn_p5 = AquaAttn(
             channels=1024
         )
 
@@ -791,14 +801,19 @@ class AquaYOLO(nn.Module):
             nc
         )
 
+        # Backward compatibility alias
+        self.aqua_attn = self.aqua_attn_p5
+
     def forward(self, x):
 
         # Backbone
         p3, p4, p5 = self.backbone(x)
 
-        # Aqua-Attn is inserted after SPPF
-        # and before PANet.
-        p5 = self.aqua_attn(p5)
+        # Multi-Scale Aqua-Attn
+        # SAC + TCG at every feature level
+        p3 = self.aqua_attn_p3(p3)
+        p4 = self.aqua_attn_p4(p4)
+        p5 = self.aqua_attn_p5(p5)
 
         # PANet
         p3_out, p4_out, p5_out = self.neck(
