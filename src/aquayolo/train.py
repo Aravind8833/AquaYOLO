@@ -121,11 +121,6 @@ class AquaYOLODataset(Dataset):
         self.num_classes = num_classes or NUM_CLASSES
         self.class_remap = None
 
-    def remap_classes(self, old_to_new, new_num_classes):
-        """Remap class IDs and update active class count."""
-        self.num_classes = new_num_classes
-        self.class_remap = old_to_new
-
         self.image_dir = (
             self.root
             / "images"
@@ -162,6 +157,11 @@ class AquaYOLODataset(Dataset):
             raise RuntimeError(
                 f"No images found in {self.image_dir}"
             )
+
+    def remap_classes(self, old_to_new, new_num_classes):
+        """Remap class IDs and update active class count."""
+        self.num_classes = new_num_classes
+        self.class_remap = old_to_new
 
     def __len__(self):
         return len(self.images)
