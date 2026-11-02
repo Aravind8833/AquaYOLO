@@ -7,6 +7,16 @@ import torch
 # AQUAYOLO PHYSICAL-DOMAIN PREPROCESSING
 # ============================================================
 
+_CLAHE_CACHE = {}
+
+
+def _get_clahe(clip_limit=2.0, tile_grid_size=(8, 8)):
+    key = (clip_limit, tile_grid_size)
+    if key not in _CLAHE_CACHE:
+        _CLAHE_CACHE[key] = cv2.createCLAHE(clipLimit=clip_limit, tileGridSize=tile_grid_size)
+    return _CLAHE_CACHE[key]
+
+
 def enhance_underwater_rgb(
     image,
     clip_limit=2.0,
@@ -14,121 +24,25 @@ def enhance_underwater_rgb(
     red_boost=1.20
 ):
     """
-    AquaYOLO physical-domain preprocessing.
-
-    Pipeline:
-
-        Input RGB image
-              |
-              v
-        RGB -> LAB
-              |
-              v
-        L-channel CLAHE
-              |
-              v
-        Red-spectrum boost
-              |
-              v
-        Enhanced RGB image
-
-    Parameters
-    ----------
-    image:
-        NumPy image in RGB format, uint8,
-        shape [H, W, 3].
-
-    clip_limit:
-        CLAHE contrast limit.
-
-    tile_grid_size:
-        CLAHE tile grid.
-
-    red_boost:
-        Multiplicative red-channel compensation factor.
-
-    Returns
-    -------
-    enhanced_rgb:
-        uint8 RGB image.
+    AquaYOLO physical-domain preprocessing (High-Speed Vectorized).
     """
-
     if image is None:
-        raise ValueError(
-            "Input image is None."
-        )
+        raise ValueError("Input image is None.")
 
-    if not isinstance(
-        image,
-        np.ndarray
-    ):
-        raise TypeError(
-            "Input image must be a NumPy array."
-        )
+    # 1. RGB -> LAB
+    lab = cv2.cvtColor(image, cv2.COLOR_RGB2LAB)
 
-    if image.ndim != 3 or image.shape[2] != 3:
-        raise ValueError(
-            "Expected image shape [H, W, 3]."
-        )
+    # 2. L-Channel CLAHE (Cached)
+    clahe = _get_clahe(clip_limit=clip_limit, tile_grid_size=tile_grid_size)
+    lab[:, :, 0] = clahe.apply(lab[:, :, 0])
 
-    if image.dtype != np.uint8:
-        image = np.clip(
-            image,
-            0,
-            255
-        ).astype(np.uint8)
+    # 3. LAB -> RGB
+    enhanced = cv2.cvtColor(lab, cv2.COLOR_LAB2RGB)
 
-    # ========================================================
-    # STEP 1: RGB -> LAB
-    # ========================================================
-
-    lab = cv2.cvtColor(
-        image,
-        cv2.COLOR_RGB2LAB
-    )
-
-    # ========================================================
-    # STEP 2: L-CHANNEL CLAHE
-    # ========================================================
-
-    l_channel = lab[:, :, 0]
-
-    clahe = cv2.createCLAHE(
-        clipLimit=clip_limit,
-        tileGridSize=tile_grid_size
-    )
-
-    lab[:, :, 0] = clahe.apply(
-        l_channel
-    )
-
-    # LAB -> RGB
-    enhanced = cv2.cvtColor(
-        lab,
-        cv2.COLOR_LAB2RGB
-    )
-
-    # ========================================================
-    # STEP 3: RED-SPECTRUM COMPENSATION
-    # ========================================================
-
-    enhanced = enhanced.astype(
-        np.float32
-    )
-
-    enhanced[:, :, 0] *= red_boost
-
-    enhanced[:, :, 0] = np.clip(
-        enhanced[:, :, 0],
-        0,
-        255
-    )
-
-    enhanced = np.clip(
-        enhanced,
-        0,
-        255
-    ).astype(np.uint8)
+    # 4. Fast Red-spectrum compensation (in-place slice without copying full image)
+    if red_boost != 1.0:
+        r_comp = np.clip(enhanced[:, :, 0].astype(np.float32) * red_boost, 0, 255).astype(np.uint8)
+        enhanced[:, :, 0] = r_comp
 
     return enhanced
 

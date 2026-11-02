@@ -980,6 +980,13 @@ def parse_args():
         help="Disable training augmentation"
     )
 
+    parser.add_argument(
+        "--val-samples",
+        type=int,
+        default=300,
+        help="Number of validation images to evaluate per intermediate epoch (0 for full)",
+    )
+
     return parser.parse_args()
 
 
@@ -1177,12 +1184,16 @@ def main():
     # Data loaders
     # --------------------------------------------------------
 
+    if torch.cuda.is_available():
+        torch.backends.cudnn.benchmark = True
+
     train_loader = DataLoader(
         train_dataset,
         batch_size=args.batch,
         shuffle=True,
         num_workers=args.workers,
         pin_memory=torch.cuda.is_available(),
+        persistent_workers=(args.workers > 0),
         collate_fn=collate_fn,
     )
 
@@ -1192,8 +1203,27 @@ def main():
         shuffle=False,
         num_workers=args.workers,
         pin_memory=torch.cuda.is_available(),
+        persistent_workers=(args.workers > 0),
         collate_fn=collate_fn,
     )
+
+    # Fast validation subset (e.g. 300 samples) for ~10s metric tracking during intermediate epochs
+    if 0 < args.val_samples < len(val_dataset):
+        val_eval_dataset = torch.utils.data.Subset(
+            val_dataset,
+            list(range(min(args.val_samples, len(val_dataset))))
+        )
+        val_eval_loader = DataLoader(
+            val_eval_dataset,
+            batch_size=args.batch,
+            shuffle=False,
+            num_workers=args.workers,
+            pin_memory=torch.cuda.is_available(),
+            persistent_workers=(args.workers > 0),
+            collate_fn=collate_fn,
+        )
+    else:
+        val_eval_loader = val_loader
 
     # --------------------------------------------------------
     # Model
@@ -1397,8 +1427,10 @@ def main():
             all_preds = []
             all_targets = []
 
+            eval_loader = val_loader if epoch == args.epochs else val_eval_loader
+
             with torch.no_grad():
-                for images, targets in val_loader:
+                for images, targets in eval_loader:
 
                     images = images.to(
                         device,
