@@ -1420,6 +1420,7 @@ def main():
                 all_preds,
                 all_targets,
                 iou_threshold=0.5,
+                num_classes=num_classes,
             )
 
             aps = []

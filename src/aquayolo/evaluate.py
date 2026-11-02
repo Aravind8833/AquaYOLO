@@ -420,22 +420,25 @@ def collect_stats(
     predictions,
     targets,
     iou_threshold,
+    num_classes=None,
 ):
+    nc = num_classes if num_classes is not None else NUM_CLASSES
     stats = {
         i: {
             "scores": [],
             "matches": [],
             "num_gt": 0,
         }
-        for i in range(NUM_CLASSES)
+        for i in range(nc)
     }
 
     for pred, target in zip(predictions, targets):
-        pred_boxes = pred["boxes"]
-        pred_scores = pred["scores"]
-        pred_labels = pred["labels"]
+        pred_boxes = pred["boxes"].detach().cpu()
+        pred_scores = pred["scores"].detach().cpu()
+        pred_labels = pred["labels"].detach().cpu()
 
         if target is not None and target.numel() > 0:
+            target = target.detach().cpu()
             gt_labels = target[:, 0].long()
             gt_boxes = xywh_to_xyxy(target[:, 1:5])
         else:
@@ -444,7 +447,7 @@ def collect_stats(
             )
             gt_boxes = torch.empty((0, 4), dtype=torch.float32)
 
-        for cls_id in range(NUM_CLASSES):
+        for cls_id in range(nc):
             gt_mask = gt_labels == cls_id
             pred_mask = pred_labels == cls_id
 
