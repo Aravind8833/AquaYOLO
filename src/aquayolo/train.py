@@ -901,13 +901,13 @@ def parse_args():
     parser.add_argument(
         "--epochs",
         type=int,
-        default=50
+        default=25
     )
 
     parser.add_argument(
         "--batch",
         type=int,
-        default=8
+        default=32
     )
 
     parser.add_argument(
@@ -919,7 +919,7 @@ def parse_args():
     parser.add_argument(
         "--lr",
         type=float,
-        default=1e-3
+        default=2e-3
     )
 
     parser.add_argument(
@@ -932,7 +932,7 @@ def parse_args():
     parser.add_argument(
         "--warmup-epochs",
         type=int,
-        default=3,
+        default=2,
         help="Linear warmup epochs"
     )
 
@@ -945,13 +945,13 @@ def parse_args():
     parser.add_argument(
         "--workers",
         type=int,
-        default=2
+        default=4
     )
 
     parser.add_argument(
         "--out",
         type=str,
-        default="./runs/aquayolo_baseline"
+        default="./runs/aquayolo_custom"
     )
 
     parser.add_argument(
