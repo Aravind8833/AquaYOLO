@@ -242,7 +242,7 @@ def decode_scale(
 
 def decode_predictions(
     outputs,
-    conf_threshold=0.10,
+    conf_threshold=0.005,
     nms_iou=0.45,
 ):
 

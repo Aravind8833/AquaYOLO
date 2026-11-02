@@ -1441,7 +1441,7 @@ def main():
 
                     preds = decode_predictions(
                         outputs,
-                        conf_threshold=0.25,
+                        conf_threshold=0.005,
                         nms_iou=0.45,
                     )
 
@@ -1538,7 +1538,8 @@ def main():
         print(
             f"EVAL  mAP@0.50={mAP50:.4f} "
             f"precision={precision_val:.4f} "
-            f"recall={recall_val:.4f}"
+            f"recall={recall_val:.4f} "
+            f"(matched {total_tp}/{total_gt} targets)"
         )
 
         print(
