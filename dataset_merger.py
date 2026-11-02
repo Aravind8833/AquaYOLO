@@ -315,14 +315,57 @@ def merge_datasets(sources: list, output_dir: Path, temp_extract_dir: Path):
         print(f"  Processed {cnt} images from {src_path.name}\n")
         total_images += cnt
 
-    # Generate unified data.yaml
+    # -----------------------------------------------------------------
+    # Scan annotations to filter out 0-annotation classes automatically
+    # -----------------------------------------------------------------
+    counts = {i: 0 for i in range(len(UNIFIED_CLASSES))}
+    for lbl_file in output_dir.rglob("labels/**/*.txt"):
+        with open(lbl_file, "r", encoding="utf-8") as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 5:
+                    try:
+                        cid = int(parts[0])
+                        if cid in counts:
+                            counts[cid] += 1
+                    except ValueError:
+                        pass
+
+    active_ids = [i for i, c in counts.items() if c > 0]
+
+    if 0 < len(active_ids) < len(UNIFIED_CLASSES):
+        removed_count = len(UNIFIED_CLASSES) - len(active_ids)
+        print(f"\n⚡ Auto-filtering {removed_count} zero-annotation species...")
+        old_to_new = {old_id: new_id for new_id, old_id in enumerate(active_ids)}
+        active_classes = [UNIFIED_CLASSES[old_id] for old_id in active_ids]
+
+        # Rewrite label files with consecutive clean class IDs
+        for lbl_file in output_dir.rglob("labels/**/*.txt"):
+            new_lines = []
+            with open(lbl_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    parts = line.strip().split()
+                    if len(parts) >= 5:
+                        try:
+                            cid = int(parts[0])
+                            if cid in old_to_new:
+                                parts[0] = str(old_to_new[cid])
+                                new_lines.append(" ".join(parts) + "\n")
+                        except ValueError:
+                            pass
+            with open(lbl_file, "w", encoding="utf-8") as f:
+                f.writelines(new_lines)
+    else:
+        active_classes = UNIFIED_CLASSES
+
+    # Generate unified data.yaml with only active classes
     data_yaml_path = output_dir / "data.yaml"
     data_dict = {
         "path": str(output_dir.resolve()),
         "train": "images/train",
         "val": "images/val",
         "test": "images/test",
-        "names": {i: name for i, name in enumerate(UNIFIED_CLASSES)},
+        "names": {i: name for i, name in enumerate(active_classes)},
     }
     with open(data_yaml_path, "w", encoding="utf-8") as f:
         yaml.safe_dump(data_dict, f, sort_keys=False)
@@ -330,13 +373,18 @@ def merge_datasets(sources: list, output_dir: Path, temp_extract_dir: Path):
     print("=" * 70)
     print("MERGE COMPLETE SUMMARY")
     print("=" * 70)
+    print(f"Active Marine Classes ({len(active_classes)}):")
+    for idx, cname in enumerate(active_classes):
+        orig_id = active_ids[idx] if len(active_ids) == len(active_classes) else idx
+        print(f"  [{idx:2d}] {cname:20s}: {counts.get(orig_id, 0):4d} annotations")
+
     for split in ["train", "val", "test"]:
         imgs = list((output_dir / "images" / split).glob("*.*"))
         lbls = list((output_dir / "labels" / split).glob("*.txt"))
-        print(f"  Split {split.upper():5s} : {len(imgs)} images, {len(lbls)} label files")
+        print(f"\n  Split {split.upper():5s} : {len(imgs)} images, {len(lbls)} label files")
 
     print(f"\nUnified config created at: {data_yaml_path}")
-    print("Ready for high-accuracy YOLO training without label collision!")
+    print("Zero-annotation classes eliminated for maximum training accuracy!")
     print("=" * 70)
     return data_yaml_path
 

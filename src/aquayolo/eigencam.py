@@ -185,11 +185,18 @@ def main():
     else:
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    print(f"Loading AquaYOLO weights from {args.weights} on {device}...")
-    model = AquaYOLO(nc=NUM_CLASSES).to(device)
-
     ckpt = torch.load(args.weights, map_location=device, weights_only=False)
     state_dict = ckpt["model_state_dict"] if (isinstance(ckpt, dict) and "model_state_dict" in ckpt) else ckpt
+
+    if "head.cls_p3.weight" in state_dict:
+        model_nc = state_dict["head.cls_p3.weight"].shape[0]
+    elif isinstance(ckpt, dict) and "nc" in ckpt:
+        model_nc = ckpt["nc"]
+    else:
+        model_nc = NUM_CLASSES
+
+    print(f"Loading AquaYOLO ({model_nc} classes) weights from {args.weights} on {device}...")
+    model = AquaYOLO(nc=model_nc).to(device)
     model.load_state_dict(state_dict)
     model.eval()
 

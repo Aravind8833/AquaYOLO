@@ -20,35 +20,56 @@ from aquayolo.preprocess import enhance_underwater_rgb, resize_image
 # ============================================================
 
 CLASS_NAMES = [
+    "fish",
     "jellyfish",
     "penguin",
     "puffin",
     "starfish",
     "stingray",
-    "basking_shark",
-    "blacktip_reef_shark",
-    "great_white_shark",
-    "hammerhead_shark",
-    "nurse_shark",
-    "oceanic_whitetip_shark",
-    "thresher_shark",
-    "whale_shark",
-    "whitetip_reef_shark",
-    "ballan_wrasse",
-    "cuckoo_wrasse",
-    "corkwing_wrasse",
-    "goldsinny_wrasse",
-    "rock_cook",
-    "atlantic_cod",
-    "pollack",
-    "whiting",
-    "spiny_dogfish",
-    "brown_crab",
-    "two_spot_goby",
+    "shark",
+    "crab",
+    "lobster",
+    "dolphin",
+    "whale",
+    "turtle",
+    "sea_urchin",
+    "sea_cucumber",
+    "eel",
+    "squid",
+    "octopus",
+    "seal",
     "human",
 ]
 
-NUM_CLASSES = 26
+NUM_CLASSES = len(CLASS_NAMES)
+
+
+def load_class_names(dataset_root):
+    """
+    Dynamically loads the exact active class names from data.yaml if present,
+    ensuring 0-annotation classes are excluded and class IDs match perfectly.
+    """
+    dataset_root = Path(dataset_root)
+    candidates = [
+        dataset_root / "data.yaml",
+        dataset_root.parent / "data.yaml",
+        dataset_root / "dataset.yaml",
+    ]
+    for cand in candidates:
+        if cand.exists():
+            try:
+                import yaml
+                with open(cand, "r", encoding="utf-8") as f:
+                    cfg = yaml.safe_load(f)
+                    if "names" in cfg:
+                        names = cfg["names"]
+                        if isinstance(names, dict):
+                            return [names[k] for k in sorted(names.keys())]
+                        elif isinstance(names, list):
+                            return list(names)
+            except Exception:
+                pass
+    return CLASS_NAMES
 
 
 class AquaYOLODataset(Dataset):
@@ -89,6 +110,7 @@ class AquaYOLODataset(Dataset):
         split,
         size=640,
         augment=False,
+        num_classes=None,
     ):
         super().__init__()
 
@@ -96,6 +118,7 @@ class AquaYOLODataset(Dataset):
         self.split = split
         self.size = size
         self.augment = augment
+        self.num_classes = num_classes or NUM_CLASSES
 
         self.image_dir = (
             self.root
@@ -179,7 +202,7 @@ class AquaYOLODataset(Dataset):
                 except ValueError:
                     continue
 
-                if cls_id < 0 or cls_id >= NUM_CLASSES:
+                if cls_id < 0 or cls_id >= self.num_classes:
                     continue
 
                 cx = min(max(cx, 0.0), 1.0)
@@ -270,15 +293,17 @@ class AquaYOLODataset(Dataset):
 
         # ----------------------------------------------------
         # AquaYOLO physical-domain preprocessing
+        # Resize FIRST to target size (640x640) for 10x-30x
+        # faster preprocessing on CPU, then apply CLAHE & red boost!
         # ----------------------------------------------------
-
-        image = enhance_underwater_rgb(
-            image
-        )
 
         image = resize_image(
             image,
             size=self.size
+        )
+
+        image = enhance_underwater_rgb(
+            image
         )
 
         # ----------------------------------------------------
@@ -371,14 +396,14 @@ def collate_fn(batch):
 # CLASS COUNT
 # ============================================================
 
-def calculate_class_counts(dataset):
+def calculate_class_counts(dataset, nc=None):
     """
     Count training annotations for class weighting.
     """
-
+    num_c = nc if nc is not None else getattr(dataset, "num_classes", NUM_CLASSES)
     counts = {
         i: 0
-        for i in range(NUM_CLASSES)
+        for i in range(num_c)
     }
 
     for image_path in dataset.images:
@@ -459,6 +484,8 @@ def train_one_epoch(
     device,
     epoch,
     total_epochs,
+    scaler=None,
+    nc=NUM_CLASSES,
 ):
     model.train()
 
@@ -468,8 +495,8 @@ def train_one_epoch(
     running_cls = 0.0
 
     num_batches = len(loader)
-
     start_time = time.time()
+    use_cuda = (device.type == "cuda")
 
     for step, (images, targets) in enumerate(
         loader,
@@ -490,32 +517,44 @@ def train_one_epoch(
             set_to_none=True
         )
 
-        # Forward
-        outputs = model(
-            images
-        )
-
-        # Loss
-        loss, loss_items = aqua_loss(
-            outputs=outputs,
-            targets=targets,
-            nc=NUM_CLASSES,
-            class_weights=class_weights,
-            box_weight=5.0,
-            obj_weight=1.0,
-            cls_weight=1.0,
-        )
-
-        # Backward
-        loss.backward()
-
-        # Gradient clipping for training stability
-        torch.nn.utils.clip_grad_norm_(
-            model.parameters(),
-            max_norm=10.0
-        )
-
-        optimizer.step()
+        # Forward with FP16 Automatic Mixed Precision (AMP)
+        if use_cuda and scaler is not None:
+            with torch.amp.autocast(device_type="cuda"):
+                outputs = model(images)
+                loss, loss_items = aqua_loss(
+                    outputs=outputs,
+                    targets=targets,
+                    nc=nc,
+                    class_weights=class_weights,
+                    box_weight=5.0,
+                    obj_weight=1.0,
+                    cls_weight=1.0,
+                )
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                max_norm=10.0
+            )
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            outputs = model(images)
+            loss, loss_items = aqua_loss(
+                outputs=outputs,
+                targets=targets,
+                nc=nc,
+                class_weights=class_weights,
+                box_weight=5.0,
+                obj_weight=1.0,
+                cls_weight=1.0,
+            )
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(
+                model.parameters(),
+                max_norm=10.0
+            )
+            optimizer.step()
 
         running_loss += float(
             loss.detach().item()
@@ -575,6 +614,7 @@ def validate(
     loader,
     class_weights,
     device,
+    nc=NUM_CLASSES,
 ):
     model.eval()
 
@@ -584,6 +624,7 @@ def validate(
     running_cls = 0.0
 
     num_batches = len(loader)
+    use_cuda = (device.type == "cuda")
 
     for images, targets in loader:
 
@@ -597,19 +638,29 @@ def validate(
             for t in targets
         ]
 
-        outputs = model(
-            images
-        )
-
-        loss, loss_items = aqua_loss(
-            outputs=outputs,
-            targets=targets,
-            nc=NUM_CLASSES,
-            class_weights=class_weights,
-            box_weight=5.0,
-            obj_weight=1.0,
-            cls_weight=1.0,
-        )
+        if use_cuda:
+            with torch.amp.autocast(device_type="cuda"):
+                outputs = model(images)
+                loss, loss_items = aqua_loss(
+                    outputs=outputs,
+                    targets=targets,
+                    nc=nc,
+                    class_weights=class_weights,
+                    box_weight=5.0,
+                    obj_weight=1.0,
+                    cls_weight=1.0,
+                )
+        else:
+            outputs = model(images)
+            loss, loss_items = aqua_loss(
+                outputs=outputs,
+                targets=targets,
+                nc=nc,
+                class_weights=class_weights,
+                box_weight=5.0,
+                obj_weight=1.0,
+                cls_weight=1.0,
+            )
 
         running_loss += float(
             loss.detach().item()
@@ -974,6 +1025,13 @@ def main():
         else "cpu"
     )
 
+    # --------------------------------------------------------
+    # Load dataset classes dynamically
+    # --------------------------------------------------------
+
+    class_names = load_class_names(dataset_root)
+    num_classes = len(class_names)
+
     print()
     print("=" * 70)
     print("AquaYOLO BASELINE TRAINING")
@@ -984,7 +1042,7 @@ def main():
     )
 
     print(
-        f"Classes : {NUM_CLASSES}"
+        f"Classes : {num_classes} active species"
     )
 
     print(
@@ -1029,6 +1087,7 @@ def main():
         split="train",
         size=args.size,
         augment=(not args.no_augment),
+        num_classes=num_classes,
     )
 
     val_dataset = AquaYOLODataset(
@@ -1036,6 +1095,7 @@ def main():
         split="val",
         size=args.size,
         augment=False,
+        num_classes=num_classes,
     )
 
     print(
@@ -1080,12 +1140,13 @@ def main():
     )
 
     class_counts = calculate_class_counts(
-        train_dataset
+        train_dataset,
+        nc=num_classes
     )
 
     class_weights = make_class_weights(
         class_counts=class_counts,
-        nc=NUM_CLASSES
+        nc=num_classes
     ).to(device)
 
     print(
@@ -1097,9 +1158,10 @@ def main():
 
     for cls_id, count in class_counts.items():
 
+        cname = class_names[cls_id] if cls_id < len(class_names) else f"class_{cls_id}"
         print(
             f"  {cls_id:2d} "
-            f"{CLASS_NAMES[cls_id]:25s} "
+            f"{cname:25s} "
             f"{count}"
         )
 
@@ -1109,11 +1171,11 @@ def main():
 
     print()
     print(
-        "Creating AquaYOLO model..."
+        f"Creating AquaYOLO model (nc={num_classes})..."
     )
 
     model = AquaYOLO(
-        nc=NUM_CLASSES
+        nc=num_classes
     ).to(device)
     
         # --------------------------------------------------------
@@ -1251,7 +1313,7 @@ def main():
         epoch_start = time.time()
 
         # ----------------------------------------------------
-        # TRAIN
+        # TRAIN (with AMP scaler)
         # ----------------------------------------------------
 
         train_metrics = train_one_epoch(
@@ -1262,6 +1324,8 @@ def main():
             device=device,
             epoch=epoch,
             total_epochs=args.epochs,
+            scaler=scaler,
+            nc=num_classes,
         )
 
         # ----------------------------------------------------
@@ -1273,11 +1337,11 @@ def main():
             loader=val_loader,
             class_weights=class_weights,
             device=device,
+            nc=num_classes,
         )
 
         # ----------------------------------------------------
         # DETECTION METRICS (mAP, precision, recall)
-        # Evaluated every epoch for proper monitoring.
         # ----------------------------------------------------
 
         mAP50 = 0.0
@@ -1325,14 +1389,12 @@ def main():
             total_fp = 0
             total_gt = 0
 
-            for cls_id in range(NUM_CLASSES):
+            for cls_id in range(num_classes):
 
-                cls_stats = stats[cls_id]
+                cls_stats = stats.get(cls_id, {"num_gt": 0, "scores": [], "matches": []})
 
-                if (
-                    cls_stats["num_gt"] == 0
-                    and len(cls_stats["scores"]) == 0
-                ):
+                # Skip classes with 0 ground-truth annotations!
+                if cls_stats["num_gt"] == 0:
                     continue
 
                 ap = compute_ap(

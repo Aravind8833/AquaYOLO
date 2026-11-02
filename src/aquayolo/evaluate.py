@@ -1059,10 +1059,6 @@ def main():
         collate_fn=collate_fn,
     )
 
-    model = AquaYOLO(
-        nc=19
-    ).to(device)
-
     checkpoint = torch.load(
         args.weights,
         map_location=device,
@@ -1074,14 +1070,24 @@ def main():
         and
         "model_state_dict" in checkpoint
     ):
-
         state_dict = checkpoint[
             "model_state_dict"
         ]
-
     else:
-
         state_dict = checkpoint
+
+    # Auto-detect trained nc from head classification layer
+    if "head.cls_p3.weight" in state_dict:
+        model_nc = state_dict["head.cls_p3.weight"].shape[0]
+    elif isinstance(checkpoint, dict) and "nc" in checkpoint:
+        model_nc = checkpoint["nc"]
+    else:
+        model_nc = 19
+
+    print(f"Detected AquaYOLO trained classes: {model_nc}")
+    model = AquaYOLO(
+        nc=model_nc
+    ).to(device)
 
     model.load_state_dict(
         state_dict
